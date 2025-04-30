@@ -1,4 +1,5 @@
-;; CipherCollab Core Contract
+;; CipherCollab Core Contract - V3
+;; Project management with participant and contribution tracking
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
@@ -7,6 +8,7 @@
 (define-constant ERR-PROJECT-NOT-FOUND (err u403))
 (define-constant ERR-PARTICIPANT-EXISTS (err u404))
 (define-constant ERR-PARTICIPANT-NOT-FOUND (err u405))
+(define-constant ERR-INVALID-STATUS (err u406))
 
 ;; Data Maps
 ;; Project data structure
@@ -33,8 +35,28 @@
   }
 )
 
+;; Track research contributions
+(define-map contributions
+  { project-id: uint, contribution-id: uint }
+  {
+    contributor: principal,
+    title: (string-ascii 64),
+    description: (string-utf8 500),
+    timestamp: uint,
+    proof-hash: (optional (buff 32)),
+    verification-status: (string-ascii 20),
+    metadata-url: (optional (string-utf8 256))
+  }
+)
+
 ;; Variables
 (define-data-var last-project-id uint u0)
+
+;; Map to track the last contribution ID for each project
+(define-map last-contribution-id-map
+  { project-id: uint }
+  { last-id: uint }
+)
 
 ;; Private Functions
 (define-private (is-project-owner (project-id uint))
@@ -86,6 +108,12 @@
       }
     )
     
+    ;; Initialize the contribution counter for this project
+    (map-set last-contribution-id-map 
+      { project-id: project-id }
+      { last-id: u0 }
+    )
+    
     ;; Return the new project ID
     (ok project-id)
   )
@@ -115,11 +143,66 @@
   )
 )
 
+;; Record a research contribution
+(define-public (add-contribution (project-id uint) (title (string-ascii 64)) (description (string-utf8 500)) (proof-hash (optional (buff 32))) (metadata-url (optional (string-utf8 256))))
+  (let (
+    (current-last-id (default-to { last-id: u0 } (map-get? last-contribution-id-map { project-id: project-id })))
+    (contribution-id (+ (get last-id current-last-id) u1))
+  )
+    ;; Check if project exists
+    (asserts! (is-some (map-get? projects { project-id: project-id })) ERR-PROJECT-NOT-FOUND)
+    
+    ;; Check if user is a participant
+    (asserts! (is-project-participant project-id tx-sender) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the contribution counter for this project
+    (map-set last-contribution-id-map 
+      { project-id: project-id }
+      { last-id: contribution-id }
+    )
+    
+    ;; Record the contribution
+    (map-set contributions
+      { project-id: project-id, contribution-id: contribution-id }
+      {
+        contributor: tx-sender,
+        title: title,
+        description: description,
+        timestamp: block-height,
+        proof-hash: proof-hash,
+        verification-status: "pending",
+        metadata-url: metadata-url
+      }
+    )
+    
+    ;; Update participant's contribution count
+    (let (
+      (participant-data (unwrap! (map-get? project-participants { project-id: project-id, participant: tx-sender }) ERR-PARTICIPANT-NOT-FOUND))
+      (new-count (+ (get contribution-count participant-data) u1))
+    )
+      (map-set project-participants
+        { project-id: project-id, participant: tx-sender }
+        (merge participant-data { contribution-count: new-count })
+      )
+    )
+    
+    (ok contribution-id)
+  )
+)
+
 ;; Update project status
 (define-public (update-project-status (project-id uint) (new-status (string-ascii 20)))
   (begin
     ;; Check authorization
     (asserts! (or (is-project-owner project-id) (is-contract-owner)) ERR-NOT-AUTHORIZED)
+    
+    ;; Validate status string (simple validation, can be extended)
+    (asserts! (or 
+      (is-eq new-status "active") 
+      (is-eq new-status "paused") 
+      (is-eq new-status "completed")
+      (is-eq new-status "archived")) 
+      ERR-INVALID-STATUS)
     
     ;; Update the project status
     (let (
@@ -145,6 +228,19 @@
 ;; Get participant details
 (define-read-only (get-participant (project-id uint) (participant principal))
   (map-get? project-participants { project-id: project-id, participant: participant })
+)
+
+;; Get contribution details
+(define-read-only (get-contribution (project-id uint) (contribution-id uint))
+  (map-get? contributions { project-id: project-id, contribution-id: contribution-id })
+)
+
+;; Get total contribution count for a project
+(define-read-only (get-project-contribution-count (project-id uint))
+  (match (map-get? last-contribution-id-map { project-id: project-id })
+    count-data (get last-id count-data)
+    u0
+  )
 )
 
 ;; Check if a principal is a participant in a project
