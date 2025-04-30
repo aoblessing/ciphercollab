@@ -1,5 +1,5 @@
-;; CipherCollab Verification Contract
-;; Extended proof structure and verification
+;; CipherCollab Verification Contract - V3
+;; Complete verification process implementation
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
@@ -8,6 +8,7 @@
 (define-constant ERR-PROOF-NOT-FOUND (err u403))
 (define-constant ERR-INVALID-PROOF (err u404))
 (define-constant ERR-INVALID-VERIFICATION (err u405))
+(define-constant ERR-VERIFICATION-EXPIRED (err u406))
 
 ;; Data Maps
 
@@ -75,7 +76,7 @@
 (define-public (submit-proof 
   (project-id uint) 
   (proof-hash (buff 32)) 
-  (data-hash (buff 32))
+  (data-hash (buff 32)) 
   (verification-params (string-utf8 1024)))
   
   (let (
@@ -107,6 +108,55 @@
   )
 )
 
+;; Verify a submitted proof
+(define-public (verify-proof (project-id uint) (proof-id uint) (is-valid bool))
+  (begin
+    ;; Check if caller is an authorized verifier
+    (asserts! (is-authorized-verifier) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the proof verification status
+    (let (
+      (proof-opt (map-get? proofs { project-id: project-id, proof-id: proof-id }))
+      (verifier-opt (map-get? verifiers { address: tx-sender }))
+    )
+      ;; Check if proof exists
+      (asserts! (is-some proof-opt) ERR-PROOF-NOT-FOUND)
+      
+      ;; Check if verifier exists
+      (asserts! (is-some verifier-opt) ERR-NOT-AUTHORIZED)
+      
+      (let (
+        (proof (unwrap-panic proof-opt))
+        (verifier-data (unwrap-panic verifier-opt))
+      )
+        ;; Check if proof hasn't already been verified
+        (asserts! (not (get is-verified proof)) ERR-INVALID-VERIFICATION)
+        
+        ;; Update the proof record
+        (map-set proofs
+          { project-id: project-id, proof-id: proof-id }
+          (merge proof { 
+            is-verified: is-valid,
+            verifier: (some tx-sender),
+            verification-time: (some block-height)
+          })
+        )
+        
+        ;; Update verifier's statistics
+        (map-set verifiers
+          { address: tx-sender }
+          (merge verifier-data { 
+            verification-count: (+ (get verification-count verifier-data) u1),
+            reputation: (+ (get reputation verifier-data) u1)
+          })
+        )
+        
+        (ok true)
+      )
+    )
+  )
+)
+
 ;; Register a new verifier
 (define-public (register-verifier (address principal))
   (begin
@@ -122,6 +172,26 @@
         registered-at: block-height,
         is-active: true
       }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Deactivate a verifier
+(define-public (deactivate-verifier (address principal))
+  (begin
+    ;; Only contract owner can deactivate verifiers
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the verifier's status
+    (let (
+      (verifier (unwrap! (map-get? verifiers { address: address }) ERR-NOT-AUTHORIZED))
+    )
+      (map-set verifiers
+        { address: address }
+        (merge verifier { is-active: false })
+      )
     )
     
     (ok true)
