@@ -1,11 +1,13 @@
 ;; CipherCollab Verification Contract
-;; Basic verification structure
+;; Extended proof structure and verification
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
 (define-constant ERR-NOT-AUTHORIZED (err u401))
 (define-constant ERR-PROOF-EXISTS (err u402))
 (define-constant ERR-PROOF-NOT-FOUND (err u403))
+(define-constant ERR-INVALID-PROOF (err u404))
+(define-constant ERR-INVALID-VERIFICATION (err u405))
 
 ;; Data Maps
 
@@ -17,7 +19,21 @@
     proof-hash: (buff 32),
     data-hash: (buff 32),
     timestamp: uint,
-    is-verified: bool
+    verification-params: (string-utf8 1024),
+    is-verified: bool,
+    verifier: (optional principal),
+    verification-time: (optional uint)
+  }
+)
+
+;; Store verifier credentials
+(define-map verifiers
+  { address: principal }
+  {
+    reputation: uint,
+    verification-count: uint,
+    registered-at: uint,
+    is-active: bool
   }
 )
 
@@ -31,6 +47,18 @@
 )
 
 ;; Private Functions
+
+;; Check if caller is authorized to verify proofs
+(define-private (is-authorized-verifier)
+  (let (
+    (verifier-data (map-get? verifiers { address: tx-sender }))
+  )
+    (match verifier-data
+      v (and (get is-active v) true)
+      false
+    )
+  )
+)
 
 ;; Public Functions
 
@@ -47,7 +75,8 @@
 (define-public (submit-proof 
   (project-id uint) 
   (proof-hash (buff 32)) 
-  (data-hash (buff 32)))
+  (data-hash (buff 32))
+  (verification-params (string-utf8 1024)))
   
   (let (
     (current-last-id (default-to { last-id: u0 } (map-get? last-proof-id-map { project-id: project-id })))
@@ -67,11 +96,35 @@
         proof-hash: proof-hash,
         data-hash: data-hash,
         timestamp: block-height,
-        is-verified: false
+        verification-params: verification-params,
+        is-verified: false,
+        verifier: none,
+        verification-time: none
       }
     )
     
     (ok proof-id)
+  )
+)
+
+;; Register a new verifier
+(define-public (register-verifier (address principal))
+  (begin
+    ;; Only contract owner can register verifiers
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    ;; Register the verifier
+    (map-set verifiers
+      { address: address }
+      {
+        reputation: u0,
+        verification-count: u0,
+        registered-at: block-height,
+        is-active: true
+      }
+    )
+    
+    (ok true)
   )
 )
 
@@ -80,6 +133,11 @@
 ;; Get proof details
 (define-read-only (get-proof (project-id uint) (proof-id uint))
   (map-get? proofs { project-id: project-id, proof-id: proof-id })
+)
+
+;; Get verifier details
+(define-read-only (get-verifier (address principal))
+  (map-get? verifiers { address: address })
 )
 
 ;; Check if a proof is verified
