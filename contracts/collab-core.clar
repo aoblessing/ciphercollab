@@ -1,5 +1,5 @@
-;; CipherCollab Core Contract - V4
-;; Project management with security controls
+;; CipherCollab Core Contract
+;; Manages research collaboration projects, participants, and basic workflow
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
@@ -139,7 +139,7 @@
 ;; Add a participant to a project
 (define-public (add-participant (project-id uint) (participant principal) (role (string-ascii 20)))
   (begin
-    ;; Check authorization and lock status
+    ;; Check authorization
     (asserts! (can-modify-project project-id) ERR-NOT-AUTHORIZED)
     
     ;; Check if participant already exists
@@ -210,7 +210,7 @@
 ;; Update project status
 (define-public (update-project-status (project-id uint) (new-status (string-ascii 20)))
   (begin
-    ;; Check authorization and lock status
+    ;; Check authorization
     (asserts! (can-modify-project project-id) ERR-NOT-AUTHORIZED)
     
     ;; Validate status string (simple validation, can be extended)
@@ -268,6 +268,33 @@
       (map-set projects
         { project-id: project-id }
         (merge project { is-locked: false })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Verify a contribution
+(define-public (verify-contribution (project-id uint) (contribution-id uint) (verification-status (string-ascii 20)))
+  (begin
+    ;; Only project owner can verify contributions
+    (asserts! (is-project-owner project-id) ERR-NOT-AUTHORIZED)
+    
+    ;; Validate verification status
+    (asserts! (or 
+      (is-eq verification-status "verified") 
+      (is-eq verification-status "rejected") 
+      (is-eq verification-status "pending-revisions")) 
+      ERR-INVALID-STATUS)
+    
+    ;; Update the contribution verification status
+    (let (
+      (contribution (unwrap! (map-get? contributions { project-id: project-id, contribution-id: contribution-id }) ERR-PROJECT-NOT-FOUND))
+    )
+      (map-set contributions
+        { project-id: project-id, contribution-id: contribution-id }
+        (merge contribution { verification-status: verification-status })
       )
     )
     
