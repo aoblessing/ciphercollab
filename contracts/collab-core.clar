@@ -1,5 +1,5 @@
-;; CipherCollab Core Contract - V3
-;; Project management with participant and contribution tracking
+;; CipherCollab Core Contract - V4
+;; Project management with security controls
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
@@ -9,6 +9,7 @@
 (define-constant ERR-PARTICIPANT-EXISTS (err u404))
 (define-constant ERR-PARTICIPANT-NOT-FOUND (err u405))
 (define-constant ERR-INVALID-STATUS (err u406))
+(define-constant ERR-PROJECT-LOCKED (err u407))
 
 ;; Data Maps
 ;; Project data structure
@@ -20,7 +21,8 @@
     owner: principal,
     created-at: uint,
     status: (string-ascii 20),
-    metadata-url: (optional (string-utf8 256))
+    metadata-url: (optional (string-utf8 256)),
+    is-locked: bool
   }
 )
 
@@ -75,6 +77,20 @@
   (is-some (map-get? project-participants { project-id: project-id, participant: address }))
 )
 
+(define-private (can-modify-project (project-id uint))
+  (let (
+    (project (unwrap! (map-get? projects { project-id: project-id }) false))
+  )
+    (and 
+      (not (get is-locked project))
+      (or 
+        (is-project-owner project-id)
+        (is-contract-owner)
+      )
+    )
+  )
+)
+
 ;; Public Functions
 ;; Create a new research project
 (define-public (create-project (name (string-ascii 64)) (description (string-utf8 500)) (metadata-url (optional (string-utf8 256))))
@@ -93,7 +109,8 @@
         owner: tx-sender,
         created-at: block-height,
         status: "active",
-        metadata-url: metadata-url
+        metadata-url: metadata-url,
+        is-locked: false
       }
     )
     
@@ -122,8 +139,8 @@
 ;; Add a participant to a project
 (define-public (add-participant (project-id uint) (participant principal) (role (string-ascii 20)))
   (begin
-    ;; Check authorization
-    (asserts! (is-project-owner project-id) ERR-NOT-AUTHORIZED)
+    ;; Check authorization and lock status
+    (asserts! (can-modify-project project-id) ERR-NOT-AUTHORIZED)
     
     ;; Check if participant already exists
     (asserts! (not (is-project-participant project-id participant)) ERR-PARTICIPANT-EXISTS)
@@ -193,8 +210,8 @@
 ;; Update project status
 (define-public (update-project-status (project-id uint) (new-status (string-ascii 20)))
   (begin
-    ;; Check authorization
-    (asserts! (or (is-project-owner project-id) (is-contract-owner)) ERR-NOT-AUTHORIZED)
+    ;; Check authorization and lock status
+    (asserts! (can-modify-project project-id) ERR-NOT-AUTHORIZED)
     
     ;; Validate status string (simple validation, can be extended)
     (asserts! (or 
@@ -211,6 +228,46 @@
       (map-set projects
         { project-id: project-id }
         (merge project { status: new-status })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Lock a project to prevent modifications
+(define-public (lock-project (project-id uint))
+  (begin
+    ;; Only project owner or contract owner can lock a project
+    (asserts! (or (is-project-owner project-id) (is-contract-owner)) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the project lock status
+    (let (
+      (project (unwrap! (map-get? projects { project-id: project-id }) ERR-PROJECT-NOT-FOUND))
+    )
+      (map-set projects
+        { project-id: project-id }
+        (merge project { is-locked: true })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Unlock a project to allow modifications
+(define-public (unlock-project (project-id uint))
+  (begin
+    ;; Only project owner or contract owner can unlock a project
+    (asserts! (or (is-project-owner project-id) (is-contract-owner)) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the project lock status
+    (let (
+      (project (unwrap! (map-get? projects { project-id: project-id }) ERR-PROJECT-NOT-FOUND))
+    )
+      (map-set projects
+        { project-id: project-id }
+        (merge project { is-locked: false })
       )
     )
     
