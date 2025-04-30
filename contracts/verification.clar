@@ -1,5 +1,4 @@
-;; CipherCollab Verification Contract - V3
-;; Complete verification process implementation
+;; CipherCollab Verification Contract
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
@@ -27,6 +26,20 @@
   }
 )
 
+;; Track verification methods
+(define-map verification-methods
+  { method-id: uint }
+  {
+    name: (string-ascii 64),
+    description: (string-utf8 500),
+    parameters: (string-utf8 1024),
+    verification-contract: principal,
+    is-active: bool,
+    added-at: uint,
+    added-by: principal
+  }
+)
+
 ;; Store verifier credentials
 (define-map verifiers
   { address: principal }
@@ -39,6 +52,7 @@
 )
 
 ;; Variables
+(define-data-var last-method-id uint u0)
 (define-data-var collab-core-contract principal CONTRACT-OWNER)
 
 ;; Map to track the last proof ID for each project
@@ -157,6 +171,40 @@
   )
 )
 
+;; Register a new verification method
+(define-public (register-verification-method 
+  (name (string-ascii 64)) 
+  (description (string-utf8 500)) 
+  (parameters (string-utf8 1024))
+  (verification-contract principal))
+  
+  (let (
+    (method-id (+ (var-get last-method-id) u1))
+  )
+    ;; Only contract owner can register verification methods
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    
+    ;; Update the method counter
+    (var-set last-method-id method-id)
+    
+    ;; Register the method
+    (map-set verification-methods
+      { method-id: method-id }
+      {
+        name: name,
+        description: description,
+        parameters: parameters,
+        verification-contract: verification-contract,
+        is-active: true,
+        added-at: block-height,
+        added-by: tx-sender
+      }
+    )
+    
+    (ok method-id)
+  )
+)
+
 ;; Register a new verifier
 (define-public (register-verifier (address principal))
   (begin
@@ -203,6 +251,11 @@
 ;; Get proof details
 (define-read-only (get-proof (project-id uint) (proof-id uint))
   (map-get? proofs { project-id: project-id, proof-id: proof-id })
+)
+
+;; Get verification method details
+(define-read-only (get-verification-method (method-id uint))
+  (map-get? verification-methods { method-id: method-id })
 )
 
 ;; Get verifier details
